@@ -67,7 +67,7 @@ def update_asset_id(client_data):
     current_asset_id = cp.get('config/system/asset_id')
     new_asset_id = f'total clients: {len(client_data)}, clients: {client_data}'
 
-    if len(str(client_data)) > 255:
+    if len(new_asset_id) > 255:
         new_asset_id = f'total clients: {len(client_data)}. See system log for details.'
         cp.log(f'Client data exceeds 255 characters. Total clients: {len(client_data)}, clients: {client_data}')
         cp.log('Setting asset_id for router...')
@@ -84,6 +84,7 @@ def update_asset_id(client_data):
 
     cp.log(f'Sleeping for {sleep_timer} seconds...')
     time.sleep(sleep_timer)
+
 
 if __name__ == '__main__':
     cp.log('Starting LAN client alert tool')
