@@ -1,17 +1,18 @@
 from csclient import EventingCSClient
 import time
-import json
 
 cp = EventingCSClient('asset_id_updater')
 
-def check_uptime(uptime_req):
+def check_uptime():
+    uptime_req = 120
+
     uptime  = int(cp.get('status/system/uptime'))
     cp.log(f'Current uptime: {uptime} seconds')
 
     if uptime < uptime_req:
         cp.log(f'Sleeping for {uptime_req - uptime} seconds')  
         time.sleep(uptime_req - uptime)
-
+    
     cp.log('Uptime check passed, continuing...')
 
 
@@ -21,7 +22,7 @@ def enable_client_usage():
     while not client_usage_enabled:
         cp.log('Enabling client data usage...')
         cp.put('config/stats/client_usage/enabled', True)
-        time.sleep(1)
+        time.sleep(5)
         client_usage_enabled = cp.get('status/client_usage/enabled')
 
     cp.log('Client data usage enabled, continuing...')
@@ -29,97 +30,65 @@ def enable_client_usage():
     return client_usage_enabled
 
 
-def get_sdk_params():
-    cp.log('Getting SDK parameters...')
-    include_ip_found = False
-    sdk_params = False
-    sdk_appdata = cp.get('config/system/sdk/appdata')
-   
-    for item in sdk_appdata:
-        if item['name'].upper() == 'INCLUDE_IP':
-            cp.log(f'{item["name"]} parameter found, continuing...')
-            sdk_params = item['value']
-            include_ip_found = True
-            break
-
-    if not include_ip_found:
-        cp.log('INCLUDE_IP parameter not found, adding parameter...')
-        sdk_appdata.append({'name': 'INCLUDE_IP', 'value': 'False'})
-        cp.put('config/system/sdk/appdata', sdk_appdata)
-        cp.log('INCLUDE_IP parameter added, continuing...')
-
-    return sdk_params
-
-
-def get_client_data(sdk_params):
+def get_client_data():
     cp.log('Getting client data...')
-    client_usage = cp.get('status/client_usage/stats')
+    client_usage_data = cp.get('status/client_usage/stats')
+    client_usage_list = []
 
-    def sdk_params_true(client_usage):
-        client_list = []
-        for client in client_usage:
-            client_list.append({client['name']: client['ip']})
-        
-        return client_list
+    for client in client_usage_data:
+        client_usage_list.append({client['mac']: client['name']})
 
-
-    def sdk_params_false(client_usage):
-        client_list = []
-        for client in client_usage:
-            client_list.append(client['name'])
-
-        return client_list
+    lan_client_data = cp.get('status/lan/clients')
+    lan_client_list = []
+    for client in lan_client_data:
+        lan_client_list.append(client['mac'])
     
+    wlan_client_data = cp.get('status/wlan/clients')
+    wlan_client_list = []
+    for client in wlan_client_data:
+        wlan_client_list.append(client['mac'])
+    
+    merged_mac_list = list(set(lan_client_list + wlan_client_list))
 
-    def client_data_length_validate(client_list, sdk_params):
-        client_data = json.dumps({'total clients': len(client_list), 'clients': client_list})
-        
-        if len(client_data) > 255 and sdk_params.upper() == 'TRUE':
-            reduced_client_list = sdk_params_false(client_list)
-            reduced_client_data = json.dumps({'total clients': len(reduced_client_list), 'clients': reduced_client_list})
-            
-            if len(reduced_client_data) > 255:
-                client_data = json.dumps({f'total clients: {len(client_list)}. See system log for details.'})
-            else:
-                client_data = reduced_client_data
-        
-        return client_data
+    client_name_list = []
+    for client in merged_mac_list:
+        for item in client_usage_data:
+            if client in item.values():
+                client_name_list.append(item['name'])
 
+    client_name_list = list(set(client_name_list))
 
-    if sdk_params.upper() == 'TRUE':
-        cp.log('include_ip parameter set to True, including IP addresses in client data...')
-        client_list = sdk_params_true(client_usage)
-    else:
-        cp.log('include_ip parameter set to False, not including IP addresses in client data...')
-        client_list = sdk_params_false(client_usage)
-
-    client_data = client_data_length_validate(client_list, sdk_params)
-    cp.log(f'Client data: {client_data}')
-
-    return client_data
+    return client_name_list
 
 
-def set_asset_id(client_data):
-    asset_id = cp.get('config/system/asset_id')
+def update_asset_id(client_data):
+    sleep_timer = 300
 
-    if asset_id == client_data:
+    current_asset_id = cp.get('config/system/asset_id')
+    new_asset_id = f'total clients: {len(client_data)}, clients: {client_data}'
+
+    if len(str(client_data)) > 255:
+        new_asset_id = f'total clients: {len(client_data)}. See system log for details.'
+        cp.log(f'Client data exceeds 255 characters. Total clients: {len(client_data)}, clients: {client_data}')
+        cp.log('Setting asset_id for router...')
+        cp.put('config/system/asset_id', new_asset_id)
+        cp.log('Router asset_id set, continuing...')
+    
+    elif current_asset_id == new_asset_id:
         cp.log('Router asset_id unchanged, continuing...')
+
     else:
         cp.log('Setting asset_id for router...')
-        cp.put('config/system/asset_id', client_data)
+        cp.put('config/system/asset_id', new_asset_id)
         cp.log('Router asset_id set, continuing...')
 
+    cp.log(f'Sleeping for {sleep_timer} seconds...')
+    time.sleep(sleep_timer)
 
 if __name__ == '__main__':
-    cp.log('Starting asset_id_updater script...')
-    sleep_timer = 300
-    uptime_req = 120
-    check_uptime(uptime_req=uptime_req)
-    client_usage_enabled = enable_client_usage()
-
-    while client_usage_enabled:
-        sdk_params = get_sdk_params()
-        client_data = get_client_data(sdk_params=sdk_params)
-        set_asset_id(client_data=client_data)
-        cp.log(f'Sleeping for {sleep_timer} seconds...')
-        time.sleep(sleep_timer)
+    cp.log('Starting LAN client alert tool')
+    check_uptime()
+    enable_client_usage()
+    while True: 
+        client_data = get_client_data()
+        update_asset_id(client_data)
